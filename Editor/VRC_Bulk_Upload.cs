@@ -49,7 +49,7 @@ public class VRC_Bulk_Upload : EditorWindow {
     static CancellationTokenSource BuildAndUploadCancellationToken = new CancellationTokenSource();
     static VRCAvatarDescriptor currentVrcAvatarDescriptor;
 
-    [MenuItem("PeanutTools/VRC Bulk Upload")]
+    [MenuItem("Tools/VRC Bulk Upload")]
     public static void ShowWindow() {
         var window = GetWindow<VRC_Bulk_Upload>();
         window.titleContent = new GUIContent("VRC Bulk Upload");
