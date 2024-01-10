@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -39,6 +40,7 @@ public class VRC_Bulk_Upload : EditorWindow {
     struct AvatarState {
         public Action action;
         public State state;
+        public string successfulBuildTime;
         public SdkBuildState? buildState;
         public SdkUploadState? uploadState;
         public System.Exception exception;
@@ -243,6 +245,13 @@ public class VRC_Bulk_Upload : EditorWindow {
 
         existingState.state = newState;
         existingState.exception = exception;
+
+        if (newState == State.Success) {
+            existingState.successfulBuildTime = DateTime.Now.ToString("h:mm:ss tt");
+        }
+        else {
+            existingState.successfulBuildTime = null;
+        }
         
         SetAvatarRootState(vrcAvatarDescriptor, existingState);
     }
@@ -357,7 +366,7 @@ public class VRC_Bulk_Upload : EditorWindow {
                 break;
             case State.Success:
                 GUI.contentColor = new Color(0.8f, 1f, 0.8f, 1);
-                GUILayout.Label("Success");
+                GUILayout.Label("Success" + (avatarState.successfulBuildTime != null ? $" ~ {avatarState.successfulBuildTime}" : ""));
                 GUI.contentColor = Color.white;
                 break;
             case State.Failed:
