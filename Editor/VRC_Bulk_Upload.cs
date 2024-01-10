@@ -2,6 +2,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEngine.SceneManagement;
@@ -60,11 +61,11 @@ public class VRC_Bulk_Upload : EditorWindow {
         scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
         CustomGUI.LargeLabel("VRC Bulk Upload");
-        CustomGUI.ItalicLabel("Bulks and uploads all active VRChat avatars in your scene.");
+        CustomGUI.ItalicLabel("Bulks and uploads all active VRChat avatars in your scene(s).");
 
         CustomGUI.LineGap();
         
-        CustomGUI.LargeLabel("Avatars In Scene");
+        CustomGUI.LargeLabel("Avatars In Scene(s)");
 
         CustomGUI.LineGap();
 
@@ -166,15 +167,36 @@ public class VRC_Bulk_Upload : EditorWindow {
         }
     }
 
-    VRCAvatarDescriptor[] GetActiveVrchatAvatars() {
+    GameObject[] GetRootObjects() {
+        int countLoaded = SceneManager.sceneCount;
+        Scene[] scenes = new Scene[countLoaded];
+ 
+        for (int i = 0; i < countLoaded; i++)
+        {
+            scenes[i] = SceneManager.GetSceneAt(i);
+        }
+
         GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+
+        foreach (var scene in scenes) {
+            if (scene.isLoaded && scene != UnityEngine.SceneManagement.SceneManager.GetActiveScene()) {
+                rootObjects = rootObjects.Concat(scene.GetRootGameObjects()).ToArray();
+            }
+        }
+
+        return rootObjects.ToArray();
+    }
+
+    VRCAvatarDescriptor[] GetActiveVrchatAvatars() {
+        GameObject[] rootObjects = GetRootObjects();
         
         var vrcAvatarDescriptors = new List<VRCAvatarDescriptor>();
 
         foreach (var rootObject in rootObjects) {
             VRCAvatarDescriptor vrcAvatarDescriptor = rootObject.GetComponent<VRCAvatarDescriptor>();
+            bool isActive = rootObject.activeInHierarchy;
 
-            if (vrcAvatarDescriptor != null) {
+            if (isActive && vrcAvatarDescriptor != null) {
                 vrcAvatarDescriptors.Add(vrcAvatarDescriptor);
             }
         }
@@ -259,13 +281,15 @@ public class VRC_Bulk_Upload : EditorWindow {
 // RENDER GUI
 
     void RenderAllAvatarsAndInScene() {
-        GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+        GameObject[] rootObjects = GetRootObjects();
+
         var hasRenderedAtLeastOne = false;
 
         foreach (var rootObject in rootObjects) {
             VRCAvatarDescriptor vrcAvatarDescriptor = rootObject.GetComponent<VRCAvatarDescriptor>();
+            bool isActive = rootObject.activeInHierarchy;
 
-            if (vrcAvatarDescriptor != null) {
+            if (isActive && vrcAvatarDescriptor != null) {
                 if (hasRenderedAtLeastOne) {
                     CustomGUI.LineGap();
                 } else {
