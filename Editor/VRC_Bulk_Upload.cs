@@ -101,6 +101,10 @@ public class VRC_Bulk_Upload : EditorWindow {
     async Task BuildAndUploadAllAvatars() {
         var activeVrchatAvatars = GetActiveVrchatAvatars();
 
+        foreach (var activeVrchatAvatar in activeVrchatAvatars) {
+            SetAvatarState(activeVrchatAvatar, State.Idle);
+        }
+
         Debug.Log($"VRC_Bulk_Upload :: Building and uploading {activeVrchatAvatars.Length} VRChat avatars...");
 
         foreach (var activeVrchatAvatar in activeVrchatAvatars) {
