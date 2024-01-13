@@ -103,8 +103,6 @@ public class VRC_Bulk_Upload : EditorWindow {
 
         foreach (var activeVrchatAvatar in activeVrchatAvatars) {
             SetAvatarState(activeVrchatAvatar, State.Idle);
-        }
-
         Debug.Log($"VRC_Bulk_Upload :: Building and uploading {activeVrchatAvatars.Length} VRChat avatars...");
 
         foreach (var activeVrchatAvatar in activeVrchatAvatars) {
