@@ -101,8 +101,6 @@ public class VRC_Bulk_Upload : EditorWindow {
     async Task BuildAndUploadAllAvatars() {
         var activeVrchatAvatars = GetActiveVrchatAvatars();
 
-        foreach (var activeVrchatAvatar in activeVrchatAvatars) {
-            SetAvatarState(activeVrchatAvatar, State.Idle);
         Debug.Log($"VRC_Bulk_Upload :: Building and uploading {activeVrchatAvatars.Length} VRChat avatars...");
 
         foreach (var activeVrchatAvatar in activeVrchatAvatars) {
@@ -145,7 +143,15 @@ public class VRC_Bulk_Upload : EditorWindow {
 
             var vrcAvatar = await GetVRCAvatarFromDescriptor(vrcAvatarDescriptor);
 
+            //Redundant safety check that ensures vrcAvatar.ID == the pipeline manager ID
+            //This can permenantly brick a VRC avatar even if reuploaded, so just in case... Seems to be a bug with SDK 3.5.0
+            var blueprintId = vrcAvatarDescriptor.GetComponent<PipelineManager>().blueprintId;
+            if (vrcAvatar.ID != blueprintId) {
+                throw new System.Exception($"Avatar ID mismatch: {vrcAvatar.ID} != {blueprintId}.");
+            }
+
             // TODO: Support thumbnail image upload?
+            // TODO: Add/Support a Cancel button?
             await builder.BuildAndUpload(vrcAvatarDescriptor.gameObject, vrcAvatar, cancellationToken: BuildAndUploadCancellationToken.Token);
         
             SetAvatarState(vrcAvatarDescriptor, State.Success);
