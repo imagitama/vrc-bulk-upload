@@ -1,7 +1,9 @@
+using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEngine.SceneManagement;
@@ -38,6 +40,7 @@ public class VRC_Bulk_Upload : EditorWindow {
     struct AvatarState {
         public Action action;
         public State state;
+        public string successfulBuildTime;
         public SdkBuildState? buildState;
         public SdkUploadState? uploadState;
         public System.Exception exception;
@@ -49,7 +52,7 @@ public class VRC_Bulk_Upload : EditorWindow {
     static CancellationTokenSource BuildAndUploadCancellationToken = new CancellationTokenSource();
     static VRCAvatarDescriptor currentVrcAvatarDescriptor;
 
-    [MenuItem("PeanutTools/VRC Bulk Upload")]
+    [MenuItem("Tools/VRC Bulk Upload")]
     public static void ShowWindow() {
         var window = GetWindow<VRC_Bulk_Upload>();
         window.titleContent = new GUIContent("VRC Bulk Upload");
@@ -60,11 +63,11 @@ public class VRC_Bulk_Upload : EditorWindow {
         scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
         CustomGUI.LargeLabel("VRC Bulk Upload");
-        CustomGUI.ItalicLabel("Bulks and uploads all active VRChat avatars in your scene.");
+        CustomGUI.ItalicLabel("Bulks and uploads all active VRChat avatars in your scenes.");
 
         CustomGUI.LineGap();
         
-        CustomGUI.LargeLabel("Avatars In Scene");
+        CustomGUI.LargeLabel("Avatars In Scenes");
 
         CustomGUI.LineGap();
 
@@ -140,7 +143,15 @@ public class VRC_Bulk_Upload : EditorWindow {
 
             var vrcAvatar = await GetVRCAvatarFromDescriptor(vrcAvatarDescriptor);
 
+            //Redundant safety check that ensures vrcAvatar.ID == the pipeline manager ID
+            //This can permenantly brick a VRC avatar even if reuploaded, so just in case... Seems to be a bug with SDK 3.5.0
+            var blueprintId = vrcAvatarDescriptor.GetComponent<PipelineManager>().blueprintId;
+            if (vrcAvatar.ID != blueprintId) {
+                throw new System.Exception($"Avatar ID mismatch: {vrcAvatar.ID} != {blueprintId}.");
+            }
+
             // TODO: Support thumbnail image upload?
+            // TODO: Add/Support a Cancel button?
             await builder.BuildAndUpload(vrcAvatarDescriptor.gameObject, vrcAvatar, cancellationToken: BuildAndUploadCancellationToken.Token);
         
             SetAvatarState(vrcAvatarDescriptor, State.Success);
@@ -166,15 +177,36 @@ public class VRC_Bulk_Upload : EditorWindow {
         }
     }
 
-    VRCAvatarDescriptor[] GetActiveVrchatAvatars() {
+    GameObject[] GetRootObjects() {
+        int countLoaded = SceneManager.sceneCount;
+        Scene[] scenes = new Scene[countLoaded];
+ 
+        for (int i = 0; i < countLoaded; i++)
+        {
+            scenes[i] = SceneManager.GetSceneAt(i);
+        }
+
         GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+
+        foreach (var scene in scenes) {
+            if (scene.isLoaded && scene != UnityEngine.SceneManagement.SceneManager.GetActiveScene()) {
+                rootObjects = rootObjects.Concat(scene.GetRootGameObjects()).ToArray();
+            }
+        }
+
+        return rootObjects.ToArray();
+    }
+
+    VRCAvatarDescriptor[] GetActiveVrchatAvatars() {
+        GameObject[] rootObjects = GetRootObjects();
         
         var vrcAvatarDescriptors = new List<VRCAvatarDescriptor>();
 
         foreach (var rootObject in rootObjects) {
             VRCAvatarDescriptor vrcAvatarDescriptor = rootObject.GetComponent<VRCAvatarDescriptor>();
+            bool isActive = rootObject.activeInHierarchy;
 
-            if (vrcAvatarDescriptor != null) {
+            if (isActive && vrcAvatarDescriptor != null) {
                 vrcAvatarDescriptors.Add(vrcAvatarDescriptor);
             }
         }
@@ -221,6 +253,13 @@ public class VRC_Bulk_Upload : EditorWindow {
 
         existingState.state = newState;
         existingState.exception = exception;
+
+        if (newState == State.Success) {
+            existingState.successfulBuildTime = DateTime.Now.ToString("h:mm:ss tt");
+        }
+        else {
+            existingState.successfulBuildTime = null;
+        }
         
         SetAvatarRootState(vrcAvatarDescriptor, existingState);
     }
@@ -259,13 +298,15 @@ public class VRC_Bulk_Upload : EditorWindow {
 // RENDER GUI
 
     void RenderAllAvatarsAndInScene() {
-        GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+        GameObject[] rootObjects = GetRootObjects();
+
         var hasRenderedAtLeastOne = false;
 
         foreach (var rootObject in rootObjects) {
             VRCAvatarDescriptor vrcAvatarDescriptor = rootObject.GetComponent<VRCAvatarDescriptor>();
+            bool isActive = rootObject.activeInHierarchy;
 
-            if (vrcAvatarDescriptor != null) {
+            if (isActive && vrcAvatarDescriptor != null) {
                 if (hasRenderedAtLeastOne) {
                     CustomGUI.LineGap();
                 } else {
@@ -333,7 +374,7 @@ public class VRC_Bulk_Upload : EditorWindow {
                 break;
             case State.Success:
                 GUI.contentColor = new Color(0.8f, 1f, 0.8f, 1);
-                GUILayout.Label("Success");
+                GUILayout.Label("Success" + (avatarState.successfulBuildTime != null ? $" ~ {avatarState.successfulBuildTime}" : ""));
                 GUI.contentColor = Color.white;
                 break;
             case State.Failed:
