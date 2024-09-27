@@ -50,6 +50,9 @@ public class VRC_Bulk_Upload : EditorWindow {
     static CancellationTokenSource BuildAndUploadCancellationToken = new CancellationTokenSource();
     static VRCAvatarDescriptor currentVrcAvatarDescriptor;
 
+    const string textInNameForQuest = "[Quest]";
+    static bool onlyAllowQuestOnAndroid = true;
+
     static bool showLogs = false;
     Vector2 logsScrollPosition;
     const string logPath = "Assets/PeanutTools/debug.log";
@@ -75,31 +78,50 @@ public class VRC_Bulk_Upload : EditorWindow {
         }
 
         CustomGUI.LineGap();
+
+        CustomGUI.LargeLabel("Settings");
+
+        onlyAllowQuestOnAndroid = CustomGUI.Checkbox($"Filter Quest avatars", onlyAllowQuestOnAndroid);
+        CustomGUI.ItalicLabel($"Ignore avatars named {textInNameForQuest} on Windows and vice-versa.");
         
-        CustomGUI.LargeLabel("Avatars In Scene");
+        CustomGUI.LineGap();
+        
+        CustomGUI.LargeLabel("Avatars");
 
         CustomGUI.LineGap();
 
         RenderAllAvatarsAndInScene();
 
         CustomGUI.LineGap();
+        
+        GUILayout.BeginHorizontal();
 
-        int count = GetActiveVrchatAvatars().Length;
+        int count = GetVrchatAvatarsToProcess().Length;
 
-        if (CustomGUI.PrimaryButton($"Build All ({count})")) {
+        if (CustomGUI.StandardButton($"Build All ({count})")) {
             BuildAllAvatars();
         }
 
-        if (CustomGUI.PrimaryButton($"Build And Test All ({count})")) {
+        if (CustomGUI.StandardButton($"Build And Test All ({count})")) {
             BuildAndTestAllAvatars();
         }
+        
+        GUILayout.EndHorizontal();
+        
+        CustomGUI.LineGap();
 
         if (CustomGUI.PrimaryButton($"Build And Upload All ({count})")) {
             BuildAndUploadAllAvatars();
         }
 
-        if (CustomGUI.StandardButton("Reset")) {
+        CustomGUI.LineGap();
+
+        if (CustomGUI.StandardButton("Reset Statuses")) {
             ResetAvatars();
+        }
+
+        if (CustomGUI.StandardButton($"Switch To {(EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android ? "Windows" : "Android")}")) {
+            SwitchPlatform();
         }
 
         CustomGUI.LineGap();
@@ -109,19 +131,19 @@ public class VRC_Bulk_Upload : EditorWindow {
         EditorGUILayout.EndScrollView();
     }
 
-    void ResetAvatars() {
-        Debug.Log("VRC_Bulk_Upload :: Reset avatars");
+    void SwitchPlatform() {
+        Debug.Log($"VRC_Bulk_Upload :: Switching platform...");
 
-        foreach (var key in avatarStates.Keys.ToList())
-        {
-            avatarStates[key] = new AvatarState()
-            {
-                state = State.Idle
-            };
+        RecordLog("Switch platform");
+
+        if (EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android) {
+            EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Standalone, BuildTarget.StandaloneWindows);
+        } else {
+            EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
         }
-
-        RecordLog("Reset avatars");
     }
+
+// LOGGING
 
     void RenderLogs() {
         if (File.Exists(logPath)) {
@@ -163,7 +185,7 @@ public class VRC_Bulk_Upload : EditorWindow {
     }
 
     async Task BuildAllAvatars() {
-        var activeVrchatAvatars = GetActiveVrchatAvatars();
+        var activeVrchatAvatars = GetVrchatAvatarsToProcess();
 
         Debug.Log($"VRC_Bulk_Upload :: Building {activeVrchatAvatars.Length} VRChat avatars...");
 
@@ -173,7 +195,7 @@ public class VRC_Bulk_Upload : EditorWindow {
     }
 
     async Task BuildAndTestAllAvatars() {
-        var activeVrchatAvatars = GetActiveVrchatAvatars();
+        var activeVrchatAvatars = GetVrchatAvatarsToProcess();
 
         Debug.Log($"VRC_Bulk_Upload :: Building and testing {activeVrchatAvatars.Length} VRChat avatars...");
 
@@ -183,7 +205,7 @@ public class VRC_Bulk_Upload : EditorWindow {
     }
 
     async Task BuildAndUploadAllAvatars() {
-        var activeVrchatAvatars = GetActiveVrchatAvatars();
+        var activeVrchatAvatars = GetVrchatAvatarsToProcess();
 
         Debug.Log($"VRC_Bulk_Upload :: Building and uploading {activeVrchatAvatars.Length} VRChat avatars...");
 
@@ -250,7 +272,6 @@ public class VRC_Bulk_Upload : EditorWindow {
         }
     }
 
-
     async Task BuildAndTestAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
         Debug.Log($"VRC_Bulk_Upload :: Building and testing '{vrcAvatarDescriptor.gameObject.name}'...");
         
@@ -278,7 +299,21 @@ public class VRC_Bulk_Upload : EditorWindow {
         }
     }
 
-    VRCAvatarDescriptor[] GetActiveVrchatAvatars() {
+    void ResetAvatars() {
+        Debug.Log("VRC_Bulk_Upload :: Reset avatars");
+
+        foreach (var key in avatarStates.Keys.ToList())
+        {
+            avatarStates[key] = new AvatarState()
+            {
+                state = State.Idle
+            };
+        }
+
+        RecordLog("Reset avatars");
+    }
+
+    VRCAvatarDescriptor[] GetVrchatAvatarsToProcess() {
         GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
         
         var vrcAvatarDescriptors = new List<VRCAvatarDescriptor>();
@@ -286,20 +321,30 @@ public class VRC_Bulk_Upload : EditorWindow {
         foreach (var rootObject in rootObjects) {
             VRCAvatarDescriptor vrcAvatarDescriptor = rootObject.GetComponent<VRCAvatarDescriptor>();
 
-            if (GetCanAvatarBeBuilt(vrcAvatarDescriptor)) {
-                vrcAvatarDescriptors.Add(vrcAvatarDescriptor);
+            if (!GetCanAvatarBeBuilt(vrcAvatarDescriptor)) {
+                continue;
             }
+
+            vrcAvatarDescriptors.Add(vrcAvatarDescriptor);
         }
 
         return vrcAvatarDescriptors.ToArray();
     }
 
+    bool GetIsAvatarForMyPlatform(VRCAvatarDescriptor vrcAvatarDescriptor) {
+        return (
+            vrcAvatarDescriptor.gameObject.name.Contains(textInNameForQuest) && EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android
+            ||
+            !vrcAvatarDescriptor.gameObject.name.Contains(textInNameForQuest) && EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android
+        );
+    }
+
     bool GetCanAvatarBeBuilt(VRCAvatarDescriptor vrcAvatarDescriptor) {
-        return vrcAvatarDescriptor != null && vrcAvatarDescriptor.gameObject.GetComponent<Animator>() != null && vrcAvatarDescriptor.gameObject.activeSelf;
+        return vrcAvatarDescriptor != null && vrcAvatarDescriptor.gameObject.GetComponent<Animator>() != null && vrcAvatarDescriptor.gameObject.activeSelf && ((onlyAllowQuestOnAndroid && GetIsAvatarForMyPlatform(vrcAvatarDescriptor)) || !onlyAllowQuestOnAndroid);
     }
 
     bool GetCanAvatarBeUploaded(VRCAvatarDescriptor vrcAvatarDescriptor) {
-        return GetCanAvatarBeBuilt(vrcAvatarDescriptor) && vrcAvatarDescriptor.gameObject.GetComponent<PipelineManager>().blueprintId != null && vrcAvatarDescriptor.gameObject.activeSelf;
+        return GetCanAvatarBeBuilt(vrcAvatarDescriptor) && vrcAvatarDescriptor.gameObject.GetComponent<PipelineManager>().blueprintId != null && vrcAvatarDescriptor.gameObject.activeSelf && ((onlyAllowQuestOnAndroid && GetIsAvatarForMyPlatform(vrcAvatarDescriptor)) || !onlyAllowQuestOnAndroid);
     }
 
     static AvatarState GetAvatarRootState(VRCAvatarDescriptor vrcAvatarDescriptor) {
@@ -386,7 +431,7 @@ public class VRC_Bulk_Upload : EditorWindow {
                 if (!GetCanAvatarBeBuilt(vrcAvatarDescriptor)) {
                     CustomGUI.DisabledLabel(rootObject.name);
                 } else {
-                    CustomGUI.BoldLabel(rootObject.name);
+                    GUILayout.Label(rootObject.name);
                 }
 
                 GUILayout.BeginHorizontal();

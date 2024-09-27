@@ -1,3 +1,7 @@
+# 1.2.0
+
+- filter avatars with [Quest] in their name
+
 # 1.1.0
 
 - update for Unity 2022.3.22f1

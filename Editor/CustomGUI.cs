@@ -4,6 +4,10 @@ using VRC.SDK3.Avatars.ScriptableObjects;
 
 namespace PeanutTools_VRC_Bulk_Upload {
     class CustomGUI {
+        public static bool Checkbox(string label, bool value) {
+            return EditorGUILayout.Toggle(label, value);
+        }
+
         public static void SmallLineGap() {
             EditorGUILayout.Space();
             EditorGUILayout.Space();
@@ -37,7 +41,7 @@ namespace PeanutTools_VRC_Bulk_Upload {
         }
 
         public static void DisabledLabel(string text, params GUILayoutOption[] options) {
-            var transparentLabelStyle = new GUIStyle();
+            var transparentLabelStyle = new GUIStyle(GUI.skin.label);
             transparentLabelStyle.normal.textColor = new Color(1, 1, 1, 0.5f);
 
             GUILayout.Label(text, transparentLabelStyle, options);
