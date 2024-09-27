@@ -36,6 +36,13 @@ namespace PeanutTools_VRC_Bulk_Upload {
             GUILayout.Label(text, EditorStyles.boldLabel, options);
         }
 
+        public static void DisabledLabel(string text, params GUILayoutOption[] options) {
+            var transparentLabelStyle = new GUIStyle();
+            transparentLabelStyle.normal.textColor = new Color(1, 1, 1, 0.5f);
+
+            GUILayout.Label(text, transparentLabelStyle, options);
+        }
+
         public static void FocusableLabel(string text, GameObject gameObjectToFocus) {
             EditorGUILayout.LabelField(new GUIContent(text), EditorStyles.label);
 

@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
@@ -31,7 +32,7 @@ public class VRC_Bulk_Upload : EditorWindow {
     enum Action {
         None,
         Build,
-        Test,
+        BuildAndTest,
         BuildAndUpload
     }
 
@@ -49,6 +50,11 @@ public class VRC_Bulk_Upload : EditorWindow {
     static CancellationTokenSource BuildAndUploadCancellationToken = new CancellationTokenSource();
     static VRCAvatarDescriptor currentVrcAvatarDescriptor;
 
+    static bool showLogs = false;
+    Vector2 logsScrollPosition;
+    const string logPath = "Assets/PeanutTools/debug.log";
+    string lastLogsContents;
+
     [MenuItem("PeanutTools/VRC Bulk Upload")]
     public static void ShowWindow() {
         var window = GetWindow<VRC_Bulk_Upload>();
@@ -62,6 +68,12 @@ public class VRC_Bulk_Upload : EditorWindow {
         CustomGUI.LargeLabel("VRC Bulk Upload");
         CustomGUI.ItalicLabel("Bulks and uploads all active VRChat avatars in your scene.");
 
+        if (APIUser.CurrentUser == null) {
+            CustomGUI.RenderErrorMessage("You must open the VRC SDK control panel first");
+            EditorGUILayout.EndScrollView();
+            return;
+        }
+
         CustomGUI.LineGap();
         
         CustomGUI.LargeLabel("Avatars In Scene");
@@ -74,13 +86,68 @@ public class VRC_Bulk_Upload : EditorWindow {
 
         int count = GetActiveVrchatAvatars().Length;
 
-        if (CustomGUI.PrimaryButton($"Build And Upload All ({count})")) {
-            // if (EditorUtility.DisplayDialog("Confirm", $"Are you sure you want to build and upload {count.ToString()} VRChat avatars?", "Yes", "No")) {
-                BuildAndUploadAllAvatars();
-            // }
+        if (CustomGUI.PrimaryButton($"Build All ({count})")) {
+            BuildAllAvatars();
         }
 
+        if (CustomGUI.PrimaryButton($"Build And Test All ({count})")) {
+            BuildAndTestAllAvatars();
+        }
+
+        if (CustomGUI.PrimaryButton($"Build And Upload All ({count})")) {
+            BuildAndUploadAllAvatars();
+        }
+
+        if (CustomGUI.StandardButton("Reset")) {
+            ResetAvatars();
+        }
+
+        CustomGUI.LineGap();
+
+        RenderLogs();
+
         EditorGUILayout.EndScrollView();
+    }
+
+    void ResetAvatars() {
+        Debug.Log("VRC_Bulk_Upload :: Reset avatars");
+
+        foreach (var key in avatarStates.Keys.ToList())
+        {
+            avatarStates[key] = new AvatarState()
+            {
+                state = State.Idle
+            };
+        }
+
+        RecordLog("Reset avatars");
+    }
+
+    void RenderLogs() {
+        if (File.Exists(logPath)) {
+            string[] logLines = File.ReadAllLines(logPath);
+    
+            System.Array.Reverse(logLines);
+            
+            lastLogsContents = string.Join(System.Environment.NewLine, logLines);
+        } else {
+            lastLogsContents = "";
+        }
+
+        EditorGUI.BeginDisabledGroup(true);
+
+        logsScrollPosition = EditorGUILayout.BeginScrollView(logsScrollPosition, GUILayout.Height(300));
+        EditorGUILayout.TextArea(lastLogsContents, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true), GUILayout.MinHeight(100));
+        EditorGUILayout.EndScrollView();
+        
+        EditorGUI.EndDisabledGroup();
+    }
+
+    static void RecordLog(string message) {
+        string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        string logMessage = $"{timestamp} - {message}";
+
+        File.AppendAllText(logPath, logMessage + System.Environment.NewLine);
     }
 
 // HELPERS
@@ -95,6 +162,26 @@ public class VRC_Bulk_Upload : EditorWindow {
         return avatarData;
     }
 
+    async Task BuildAllAvatars() {
+        var activeVrchatAvatars = GetActiveVrchatAvatars();
+
+        Debug.Log($"VRC_Bulk_Upload :: Building {activeVrchatAvatars.Length} VRChat avatars...");
+
+        foreach (var activeVrchatAvatar in activeVrchatAvatars) {
+            await BuildAvatar(activeVrchatAvatar);
+        }
+    }
+
+    async Task BuildAndTestAllAvatars() {
+        var activeVrchatAvatars = GetActiveVrchatAvatars();
+
+        Debug.Log($"VRC_Bulk_Upload :: Building and testing {activeVrchatAvatars.Length} VRChat avatars...");
+
+        foreach (var activeVrchatAvatar in activeVrchatAvatars) {
+            await BuildAndTestAvatar(activeVrchatAvatar);
+        }
+    }
+
     async Task BuildAndUploadAllAvatars() {
         var activeVrchatAvatars = GetActiveVrchatAvatars();
 
@@ -107,6 +194,8 @@ public class VRC_Bulk_Upload : EditorWindow {
 
     async Task BuildAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
         Debug.Log($"VRC_Bulk_Upload :: Building '{vrcAvatarDescriptor.gameObject.name}'...");
+
+        RecordLog($"Build '{vrcAvatarDescriptor.gameObject.name}'...");
         
         try {
             if (!VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
@@ -116,19 +205,26 @@ public class VRC_Bulk_Upload : EditorWindow {
             currentVrcAvatarDescriptor = vrcAvatarDescriptor;
             SetAvatarAction(vrcAvatarDescriptor, Action.Build);
 
+            Repaint();
+
             string bundlePath = await builder.Build(vrcAvatarDescriptor.gameObject);
             
             Debug.Log($"VRC_Bulk_Upload :: '{vrcAvatarDescriptor.gameObject.name}' built to '{bundlePath}'");
-
+            
             SetAvatarState(vrcAvatarDescriptor, State.Success);
+            
+            RecordLog($"Build '{vrcAvatarDescriptor.gameObject.name}' success");
         } catch (System.Exception e) {
             SetAvatarState(vrcAvatarDescriptor, State.Failed, e);
             Debug.LogError(e);
+            RecordLog($"Build '{vrcAvatarDescriptor.gameObject.name}' failed");
         }
     }
 
     async Task BuildAndUploadAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
         Debug.Log($"VRC_Bulk_Upload :: Building and uploading '{vrcAvatarDescriptor.gameObject.name}'...");
+
+        RecordLog($"Build and upload '{vrcAvatarDescriptor.gameObject.name}'...");
 
         try {
             if (!VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
@@ -138,31 +234,47 @@ public class VRC_Bulk_Upload : EditorWindow {
             currentVrcAvatarDescriptor = vrcAvatarDescriptor;
             SetAvatarAction(vrcAvatarDescriptor, Action.BuildAndUpload);
 
+            Repaint();
+
             var vrcAvatar = await GetVRCAvatarFromDescriptor(vrcAvatarDescriptor);
 
-            // TODO: Support thumbnail image upload?
             await builder.BuildAndUpload(vrcAvatarDescriptor.gameObject, vrcAvatar, cancellationToken: BuildAndUploadCancellationToken.Token);
-        
+            
             SetAvatarState(vrcAvatarDescriptor, State.Success);
+            
+            RecordLog($"Build and upload '{vrcAvatarDescriptor.gameObject.name}' success");
         } catch (System.Exception e) {
             SetAvatarState(vrcAvatarDescriptor, State.Failed, e);
             Debug.LogError(e);
+            RecordLog($"Build and upload '{vrcAvatarDescriptor.gameObject.name}' failed");
         }
     }
 
 
     async Task BuildAndTestAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
         Debug.Log($"VRC_Bulk_Upload :: Building and testing '{vrcAvatarDescriptor.gameObject.name}'...");
-
-        if (!VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
-            throw new System.Exception("No builder found");
-        }
+        
+        RecordLog($"Build and test '{vrcAvatarDescriptor.gameObject.name}'...");
 
         try {
+            if (!VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
+                throw new System.Exception("No builder found");
+            }
+
+            currentVrcAvatarDescriptor = vrcAvatarDescriptor;
+            SetAvatarAction(vrcAvatarDescriptor, Action.BuildAndTest);
+
+            Repaint();
+
             await builder.BuildAndTest(vrcAvatarDescriptor.gameObject);
+
+            SetAvatarState(vrcAvatarDescriptor, State.Success);
+            
+            RecordLog($"Build and test '{vrcAvatarDescriptor.gameObject.name}' success");
         } catch (System.Exception e) {
             SetAvatarState(vrcAvatarDescriptor, State.Failed, e);
             Debug.LogError(e);
+            RecordLog($"Build and test '{vrcAvatarDescriptor.gameObject.name}' failed");
         }
     }
 
@@ -174,7 +286,7 @@ public class VRC_Bulk_Upload : EditorWindow {
         foreach (var rootObject in rootObjects) {
             VRCAvatarDescriptor vrcAvatarDescriptor = rootObject.GetComponent<VRCAvatarDescriptor>();
 
-            if (vrcAvatarDescriptor != null) {
+            if (GetCanAvatarBeBuilt(vrcAvatarDescriptor)) {
                 vrcAvatarDescriptors.Add(vrcAvatarDescriptor);
             }
         }
@@ -183,11 +295,11 @@ public class VRC_Bulk_Upload : EditorWindow {
     }
 
     bool GetCanAvatarBeBuilt(VRCAvatarDescriptor vrcAvatarDescriptor) {
-        return vrcAvatarDescriptor != null && vrcAvatarDescriptor.gameObject.GetComponent<Animator>() != null;
+        return vrcAvatarDescriptor != null && vrcAvatarDescriptor.gameObject.GetComponent<Animator>() != null && vrcAvatarDescriptor.gameObject.activeSelf;
     }
 
     bool GetCanAvatarBeUploaded(VRCAvatarDescriptor vrcAvatarDescriptor) {
-        return GetCanAvatarBeBuilt(vrcAvatarDescriptor) && vrcAvatarDescriptor.gameObject.GetComponent<PipelineManager>().blueprintId != null;
+        return GetCanAvatarBeBuilt(vrcAvatarDescriptor) && vrcAvatarDescriptor.gameObject.GetComponent<PipelineManager>().blueprintId != null && vrcAvatarDescriptor.gameObject.activeSelf;
     }
 
     static AvatarState GetAvatarRootState(VRCAvatarDescriptor vrcAvatarDescriptor) {
@@ -228,6 +340,10 @@ public class VRC_Bulk_Upload : EditorWindow {
     static void SetAvatarBuildState(VRCAvatarDescriptor vrcAvatarDescriptor, SdkBuildState? newBuildState) {
         var existingState = GetAvatarRootState(vrcAvatarDescriptor);
 
+        if (existingState.buildState == newBuildState) {
+            return;
+        }
+        
         Debug.Log($"VRC_Bulk_Upload :: Build State '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.buildState}' => '{newBuildState}'");
 
         existingState.buildState = newBuildState;
@@ -237,24 +353,19 @@ public class VRC_Bulk_Upload : EditorWindow {
 
     static void SetAvatarUploadState(VRCAvatarDescriptor vrcAvatarDescriptor, SdkUploadState? newUploadState) {
         var existingState = GetAvatarRootState(vrcAvatarDescriptor);
-        
+
+        if (existingState.uploadState == newUploadState) {
+            return;
+        }
+
+        // NOTE: SDK changes upload state to empty while uploading for some reason
+
         Debug.Log($"VRC_Bulk_Upload :: Upload State '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.uploadState}' => '{newUploadState}'");
 
         existingState.uploadState = newUploadState;
         
         SetAvatarRootState(vrcAvatarDescriptor, existingState);
     }
-
-    //     void SetAvatarState(VRCAvatarDescriptor vrcAvatarDescriptor, State newState, SdkBuildState? newBuildState, SdkUploadState? newUploadState, System.Exception exception = null) {
-    //     var existingState = avatarStates[vrcAvatarDescriptor];
-        
-    //     avatarStates[vrcAvatarDescriptor] = new AvatarState() {
-    //         state = ((existingState != null && newState == null) ? existingState.state : newState),
-    //         buildState = newBuildState,
-    //         uploadState = newUploadState,
-    //         exception = exception
-    //     };
-    // }
 
 // RENDER GUI
 
@@ -272,7 +383,11 @@ public class VRC_Bulk_Upload : EditorWindow {
                     hasRenderedAtLeastOne = true;
                 }
 
-                CustomGUI.MediumLabel($"{rootObject.name}");
+                if (!GetCanAvatarBeBuilt(vrcAvatarDescriptor)) {
+                    CustomGUI.DisabledLabel(rootObject.name);
+                } else {
+                    CustomGUI.BoldLabel(rootObject.name);
+                }
 
                 GUILayout.BeginHorizontal();
 
@@ -285,7 +400,7 @@ public class VRC_Bulk_Upload : EditorWindow {
                     BuildAvatar(vrcAvatarDescriptor);
                 }
 
-                if (CustomGUI.TinyButton("Test")) {
+                if (CustomGUI.TinyButton("Build & Test")) {
                     BuildAndTestAvatar(vrcAvatarDescriptor);
                 }
                 EditorGUI.EndDisabledGroup();
@@ -311,10 +426,21 @@ public class VRC_Bulk_Upload : EditorWindow {
         }
     }
 
+    string GetSuccessLabel(AvatarState avatarState) {
+        switch (avatarState.action) {
+            case Action.Build:
+                return "Avatar Built";
+            case Action.BuildAndTest:
+                return "Test Avatar Built";
+            case Action.BuildAndUpload:
+                return "Avatar Uploaded";
+            default:
+                return "Unknown Success";
+        }
+    }
+
     void RenderAvatarState(VRCAvatarDescriptor vrcAvatarDescriptor) {
         AvatarState avatarState = GetAvatarRootState(vrcAvatarDescriptor);
-
-        // Debug.Log($"Rendering '{vrcAvatarDescriptor.gameObject.name}' action '{avatarState.action}' state '{avatarState.state}'");
 
         switch (avatarState.state) {
             case State.Idle:
@@ -323,17 +449,17 @@ public class VRC_Bulk_Upload : EditorWindow {
                 break;
             case State.Building:
                 GUI.contentColor = new Color(0.8f, 0.8f, 1f, 1);
-                GUILayout.Label("Building");
+                GUILayout.Label("Building...");
                 GUI.contentColor = Color.white;
                 break;
             case State.Uploading:
                 GUI.contentColor = new Color(0.8f, 0.8f, 1f, 1);
-                GUILayout.Label("Uploading");
+                GUILayout.Label("Uploading...");
                 GUI.contentColor = Color.white;
                 break;
             case State.Success:
                 GUI.contentColor = new Color(0.8f, 1f, 0.8f, 1);
-                GUILayout.Label("Success");
+                GUILayout.Label(GetSuccessLabel(avatarState));
                 GUI.contentColor = Color.white;
                 break;
             case State.Failed:
@@ -359,24 +485,6 @@ public class VRC_Bulk_Upload : EditorWindow {
             if (VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
                 builder.OnSdkBuildStart += OnBuildStarted;
                 builder.OnSdkUploadStart += OnUploadStarted;
-
-        //                 // Build Events
-        // event EventHandler<object> OnSdkBuildStart;
-        // event EventHandler<string> OnSdkBuildProgress;
-        // event EventHandler<string> OnSdkBuildFinish;
-        // event EventHandler<string> OnSdkBuildSuccess;
-        // event EventHandler<string> OnSdkBuildError;
-
-        // event EventHandler<SdkBuildState> OnSdkBuildStateChange;
-        // SdkBuildState BuildState { get; }
-
-        // // Upload Events
-        // event EventHandler OnSdkUploadStart;
-        // event EventHandler<(string status, float percentage)> OnSdkUploadProgress;
-        // event EventHandler<string> OnSdkUploadFinish;
-        // event EventHandler<string> OnSdkUploadSuccess;
-        // event EventHandler<string> OnSdkUploadError;
-
                 builder.OnSdkBuildStateChange += OnSdkBuildStateChange;
                 builder.OnSdkUploadStateChange += OnSdkUploadStateChange;
             }
@@ -400,10 +508,6 @@ public class VRC_Bulk_Upload : EditorWindow {
 
             SetAvatarBuildState(currentVrcAvatarDescriptor, newState);
             SetAvatarUploadState(currentVrcAvatarDescriptor, null);
-
-            if (newState == SdkBuildState.Success && GetAvatarRootState(currentVrcAvatarDescriptor).action == Action.Build) {
-                SetAvatarState(currentVrcAvatarDescriptor, State.Success);
-            }
         }
 
         private static void OnUploadStarted(object sender, object target) {
@@ -425,10 +529,6 @@ public class VRC_Bulk_Upload : EditorWindow {
 
             SetAvatarBuildState(currentVrcAvatarDescriptor, null);
             SetAvatarUploadState(currentVrcAvatarDescriptor, newState);
-
-            if (newState == SdkUploadState.Success) {
-                SetAvatarState(currentVrcAvatarDescriptor, State.Success);
-            }
         }
 
         [InitializeOnLoad]
