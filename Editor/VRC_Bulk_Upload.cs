@@ -69,7 +69,7 @@ public class VRC_Bulk_Upload : EditorWindow {
         scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
         CustomGUI.LargeLabel("VRC Bulk Upload");
-        CustomGUI.ItalicLabel("Bulks and uploads all active VRChat avatars in your scene.");
+        CustomGUI.ItalicLabel("Bulk uploads all active VRChat avatars in your scene.");
 
         if (APIUser.CurrentUser == null) {
             CustomGUI.RenderErrorMessage("You must open the VRC SDK control panel first");
