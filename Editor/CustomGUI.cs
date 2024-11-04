@@ -91,8 +91,29 @@ namespace PeanutTools_VRC_Bulk_Upload {
         }
 
         public static bool PrimaryButton(string label) {
-            return GUILayout.Button(label, GUILayout.Width(250), GUILayout.Height(50));
+            GUIStyle buttonStyle = new GUIStyle(GUI.skin.button);
+
+            var originalColor = GUI.backgroundColor;
+
+            GUI.backgroundColor = new Color(0.25f, 0.25f, 0.75f);
+
+            var result = GUILayout.Button(label, buttonStyle, GUILayout.Width(250), GUILayout.Height(50));
+
+            GUI.backgroundColor = originalColor;
+
+            return result;
         }
+
+        // private static Texture2D MakeTex(int width, int height, Color col) {
+        //     Color[] pix = new Color[width * height];
+        //     for (int i = 0; i < pix.Length; i++) {
+        //         pix[i] = col;
+        //     }
+        //     Texture2D result = new Texture2D(width, height);
+        //     result.SetPixels(pix);
+        //     result.Apply();
+        //     return result;
+        // }
 
         public static bool StandardButton(string label) {
             return GUILayout.Button(label, GUILayout.Width(150), GUILayout.Height(25));
@@ -143,6 +164,18 @@ namespace PeanutTools_VRC_Bulk_Upload {
             GUIStyle guiStyle = new GUIStyle(GUI.skin.label);
             guiStyle.normal.textColor = new Color(1.0f, 1.0f, 0.5f);
             GUILayout.Label(message, guiStyle);
+        }
+
+        public static void RenderLoading(string message) {
+            GUIStyle labelStyle = new GUIStyle(GUI.skin.label);
+            // labelStyle.normal.textColor = Color.grey;
+            labelStyle.alignment = TextAnchor.MiddleCenter;
+            labelStyle.padding = new RectOffset(10, 10, 10, 10);
+            labelStyle.fontSize = 16;
+
+            GUILayout.BeginVertical();
+            GUILayout.Label(message, labelStyle);
+            GUILayout.EndVertical();
         }
     }
 }
