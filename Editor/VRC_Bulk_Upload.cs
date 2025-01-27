@@ -403,12 +403,16 @@ If something goes wrong just delete the Quest scene and start again.");
 
         if (autoQuestify) {
             Debug.Log("VRC_Bulk_Upload :: Auto Questify enabled");
+            
+            EditorPrefs.SetBool(editorPrefNeedsToQuestifyKey, true);
 
             #pragma warning disable CS4014
             SwitchToAndroid();
             #pragma warning restore CS4014
         } else {
             Debug.Log("VRC_Bulk_Upload :: Auto Questify disabled");
+            
+            EditorPrefs.SetBool(editorPrefNeedsToQuestifyKey, false);
         }
     }
 
@@ -421,15 +425,6 @@ If something goes wrong just delete the Quest scene and start again.");
         }
 
         Debug.Log($"VRC_Bulk_Upload :: Switched to Android");
-
-        // fix weird case
-        if (isAlreadyQuestifying) {
-            return;
-        }
-
-        EditorPrefs.SetBool(editorPrefNeedsToQuestifyKey, true);
-
-        // unity re-compiles this script (we lose this instance), reads the bool, keeps going
     }
 
     static async Task QuestifyActiveSceneAndReturnToWindows() {
