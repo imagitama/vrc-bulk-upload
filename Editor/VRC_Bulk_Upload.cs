@@ -61,7 +61,7 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
 
     // logging
     Vector2 logsScrollPosition;
-    const string logPath = "Assets/PeanutTools/debug.log";
+    const string logPath = "Temp/PeanutTools/BulkUploader/debug.log";
     string lastLogsContents;
 
     // questify
@@ -338,7 +338,18 @@ If something goes wrong just delete the Quest scene and start again.");
         EditorGUI.EndDisabledGroup();
     }
 
+    static void CreateFileIfDoesNotExist(string filePath) {
+        if (File.Exists(filePath))
+            return;
+
+        var fileName = Path.GetFileName(filePath);
+        var fileDirectoryPath = filePath.Replace(fileName, "");
+        Directory.CreateDirectory(fileDirectoryPath);
+    }
+
     static void RecordLog(string message) {
+        CreateFileIfDoesNotExist(logPath);
+
         string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         string logMessage = $"{timestamp} - {message}";
 
