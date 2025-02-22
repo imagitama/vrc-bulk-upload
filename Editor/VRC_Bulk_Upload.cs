@@ -606,9 +606,33 @@ If something goes wrong just delete the Quest scene and start again.");
         RecordLog("Reset avatars");
     }
 
-    static List<VRCAvatarDescriptor> GetVrchatAvatarsToProcess(bool ignoreQuestCheck = false) {
-        GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+    static Scene[] GetLoadedScenes() {
+        List<Scene> loadedScenes = new List<Scene>(SceneManager.sceneCount);
+        for (int sceneIndex = 0; sceneIndex < SceneManager.sceneCount; ++sceneIndex)
+        {
+            Scene scene = SceneManager.GetSceneAt(sceneIndex);
+            if (scene.isLoaded) {
+                loadedScenes.Add(scene);
+            }
+        }
+
+        return loadedScenes.ToArray();
+    }
+
+    static GameObject[] GetRootObjectsInAllLoadedScenes() {
+        List<GameObject> rootObjects = new List<GameObject>();
+        var scenes = GetLoadedScenes();
         
+        foreach (var scene in scenes) {
+            var sceneRootObjects = scene.GetRootGameObjects();
+            rootObjects.AddRange(sceneRootObjects);
+        }
+
+        return rootObjects.ToArray();
+    }
+
+    static List<VRCAvatarDescriptor> GetVrchatAvatarsToProcess(bool ignoreQuestCheck = false) {
+        GameObject[] rootObjects = GetRootObjectsInAllLoadedScenes();
         var vrcAvatarDescriptors = new List<VRCAvatarDescriptor>();
 
         foreach (var rootObject in rootObjects) {
@@ -710,7 +734,7 @@ If something goes wrong just delete the Quest scene and start again.");
 // RENDER GUI
 
     void RenderAllAvatarsAndInScene() {
-        GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+        GameObject[] rootObjects = GetRootObjectsInAllLoadedScenes();
         var hasRenderedAtLeastOne = false;
 
         foreach (var rootObject in rootObjects) {
