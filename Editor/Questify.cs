@@ -25,13 +25,13 @@ using UnityEditor.SceneManagement;
 namespace PeanutTools_VRC_Bulk_Upload {
     public static class Questify {
         public static VRCAvatarDescriptor QuestifyAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
-            Debug.Log($"VRC_Bulk_Upload :: Questifying \"{vrcAvatarDescriptor.gameObject.name}\"...");
+            Utils.LogMessage($"Questifying '{vrcAvatarDescriptor.gameObject.name}'...");
 
 #if VRC_QUESTIFYER_INSTALLED
             Transform newVrcAvatar = PeanutTools_VRCQuestifyer.Questifyer.CloneAndQuestifyAvatar(vrcAvatarDescriptor);
             return newVrcAvatar.GetComponent<VRCAvatarDescriptor>();
 #else
-            Debug.Log($"VRC_Bulk_Upload :: Questifyer not installed!");
+            Utils.LogMessage($"Questifyer not installed");
             return null;
 #endif
         }
@@ -43,7 +43,7 @@ namespace PeanutTools_VRC_Bulk_Upload {
         }
 
         public static void CreateQuestScene() {
-            Debug.Log($"VRC_Bulk_Upload :: Create Quest scene");
+            Utils.LogMessage($"Create Quest scene");
 
             var originalScene = EditorSceneManager.GetActiveScene();
             string originalScenePath = originalScene.path;
@@ -58,25 +58,25 @@ namespace PeanutTools_VRC_Bulk_Upload {
             string questScenePath = Path.Combine(Path.GetDirectoryName(originalScenePath), $"{questSceneName}.unity");
 
             if (File.Exists(questScenePath)) {
-                Debug.Log("VRC_Bulk_Upload :: Quest version already exists. Deleting existing quest scene...");
+                Utils.LogMessage("Quest version already exists. Deleting existing quest scene...");
                 AssetDatabase.DeleteAsset(questScenePath);
             } else {
-                Debug.Log("VRC_Bulk_Upload :: Scene does not exist, creating...");
+                Utils.LogMessage("Scene does not exist, creating...");
             }
 
-            Debug.Log("VRC_Bulk_Upload :: Duplicating current scene...");
+            Utils.LogMessage("Duplicating current scene...");
             AssetDatabase.CopyAsset(originalScenePath, questScenePath);
 
-            Debug.Log("VRC_Bulk_Upload :: Loading quest scene...");
+            Utils.LogMessage("Loading quest scene...");
             EditorSceneManager.OpenScene(questScenePath, OpenSceneMode.Single);
         }
 
         public static void SwitchScene(string scenePath) {
-            Debug.Log("VRC_Bulk_Upload :: Saving scene...");
+            Utils.LogMessage("Saving scene...");
 
             EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene());
 
-            Debug.Log("VRC_Bulk_Upload :: Reloading original scene...");
+            Utils.LogMessage("Reloading original scene...");
 
             EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
         }

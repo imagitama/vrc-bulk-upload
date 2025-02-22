@@ -45,35 +45,35 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
         public System.Exception exception;
     }
     
-    // gui
     Vector2 scrollPosition;
-    static Dictionary<string, AvatarState> avatarStates = new Dictionary<string, AvatarState>();
+    Dictionary<string, AvatarState> avatarStates = new Dictionary<string, AvatarState>();
+    bool hasInit = false;
+
+    // auth - must be static to persist
+    static Task<bool> loginTask;
 
     // vrc sdk
-    static bool isRegisteredWithSdk = false;
-    static VRCAvatarDescriptor currentVrcAvatarDescriptor;
-    static CancellationTokenSource GetAvatarCancellationToken = new CancellationTokenSource();
-    static CancellationTokenSource BuildAndUploadCancellationToken = new CancellationTokenSource();
+    VRCAvatarDescriptor currentVrcAvatarDescriptor;
+    CancellationTokenSource getAvatarCancellationToken;
+    CancellationTokenSource buildAndUploadCancellationToken;
 
     // quest
     const string textInNameForQuest = "[Quest]";
-    static bool onlyAllowQuestOnAndroid = true;
+    bool onlyAllowQuestOnAndroid = true;
 
     // logging
     Vector2 logsScrollPosition;
-    const string logPath = "Temp/PeanutTools/BulkUploader/debug.log";
+    const string logPath = "Temp/PeanutTools/VRC_Bulk_Upload/debug.log";
     string lastLogsContents;
 
     // questify
-    static bool autoQuestify = false;
+    bool autoQuestify = false;
 
     // auth
-    static bool hasTriedToLogin = false;
-    static bool isLoggedIn = false;
-    static bool isLoggingIn = false;
+    bool isLoggingIn = false;
 
     const string editorPrefNeedsToQuestifyKey = "NeedsToQuestify";
-    static bool isAlreadyQuestifying = false;
+    bool isAlreadyQuestifying = false;
 
     [MenuItem("Tools/PeanutTools/VRC Bulk Upload")]
     public static void ShowWindow() {
@@ -82,34 +82,76 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
         window.minSize = new Vector2(400, 200);
     }
 
-    void OnEnable() { 
-        if (GetIsAndroid() && EditorPrefs.GetBool(editorPrefNeedsToQuestifyKey) == true) {
-            Debug.Log("VRC_Bulk_Upload :: OnEnable needs to questify");
+    bool GetIsLoggedIn() {
+        return VRC.Core.APIUser.CurrentUser != null;
+    }
 
-            EditorPrefs.SetBool(editorPrefNeedsToQuestifyKey, false);
+    void OnEnable() {
+        // just do this every time in hope it works
+        if (!GetIsLoggedIn()) {
+            #pragma warning disable CS4014
+            Login();
+            #pragma warning restore CS4014
+        }
 
-            QuestifyActiveSceneAndReturnToWindows();
-        } else {
-            if (!isLoggedIn && !hasTriedToLogin) {
-                Debug.Log("VRC_Bulk_Upload :: OnEnable login");
-                hasTriedToLogin = true;
+        RegisterSDKCallback();
 
-                #pragma warning disable CS4014
-                Login();
-                #pragma warning restore CS4014
+        Init();
+    }
+
+    void OnDisable() {
+        UnregisterSDKCallback();
+    }
+
+    // this must only happen once the window has "loaded"
+    void Init() {
+        if (hasInit) {
+            return;
+        }
+        
+        hasInit = true;
+
+        Utils.LogMessage("Initializing...");
+
+        if (Utils.GetIsAndroid()) {
+            if (EditorPrefs.GetBool(editorPrefNeedsToQuestifyKey) == true) {
+                Utils.LogMessage("Editor pref set - need to Questify");
+
+                EditorPrefs.SetBool(editorPrefNeedsToQuestifyKey, false);
+
+                QuestifyActiveSceneAndReturnToWindows();
+            } else {
+                Utils.LogMessage("Editor pref NOT set - does NOT need to Questify");
             }
         }
     }
 
-    static async Task<bool> Login() {
-        Debug.Log($"VRC_Bulk_Upload :: Logging in with SDK...");
+    async Task<bool> Login() {
+        if (loginTask != null) {
+            Utils.LogMessage("Waiting for existing login attempt");
+            return await loginTask;
+        }
+
+        loginTask = PerformLogin();
+
+        try {
+            return await loginTask;
+        } finally {
+            loginTask = null;
+        }
+    }
+    
+    async Task<bool> PerformLogin() {
+        Utils.LogMessage("Logging in...");
 
         if (VRC.Core.APIUser.CurrentUser != null) {
-            Debug.Log("VRC_Bulk_Upload :: Current user already found");
+            Utils.LogMessage("Current user already found");
             isLoggingIn = false;
-            isLoggedIn = true;
+            Utils.LogMessage("Login success");
             return true;
         }
+
+        Utils.LogMessage($"Telling SDK to load credentials (5 sec)...");
         
         isLoggingIn = true;
         var result = VRC.Core.ApiCredentials.Load();
@@ -119,28 +161,28 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
 
         while (!VRC.Core.API.IsReady()) {
             if (cancellationToken.IsCancellationRequested) {
-                Debug.Log("VRC_Bulk_Upload :: Waiting for API cancelled");
+                Utils.LogMessage("Waiting for API cancelled");
                 return false;
             }
 
-            Debug.Log("VRC_Bulk_Upload :: Waiting for API");
+            Utils.LogMessage("Waiting for API (500ms)");
             await Task.Delay(500);
         }
 
-        Debug.Log("VRC_Bulk_Upload :: API ready");
+        Utils.LogMessage("API ready, telling SDK to fetch user account...");
 
         var tcs = new TaskCompletionSource<bool>();
 
         VRC.Core.APIUser.InitialFetchCurrentUser(
             onSuccess: (userContainer) => {
-                Debug.Log("VRC_Bulk_Upload :: Current user found");
+                Utils.LogMessage("User account fetched");
                 isLoggingIn = false;
-                isLoggedIn = true;
                 StaticRepaint();
+                Utils.LogMessage("Login success");
                 tcs.SetResult(true);
             },
             onError: (errorContainer) => {
-                Debug.Log("VRC_Bulk_Upload :: Failed to get current user");
+                Utils.LogMessage($"Failed to fetch current user: {errorContainer}");
                 isLoggingIn = false;
                 StaticRepaint();
                 tcs.SetResult(false);
@@ -148,23 +190,6 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
         );
 
         return await tcs.Task;
-    }
-
-    static async Task WaitForRegisteredWithSdk() {
-        var cancellationTokenSource = new CancellationTokenSource(5000); // after 5 seconds cancel it all
-        var cancellationToken = cancellationTokenSource.Token;
-
-        while (!isRegisteredWithSdk) {
-            if (cancellationToken.IsCancellationRequested) {
-                Debug.Log("VRC_Bulk_Upload :: Waiting for register with SDK cancelled");
-                return;
-            }
-
-            Debug.Log("VRC_Bulk_Upload :: Waiting to register with SDK");
-            await Task.Delay(500);
-        }
-
-        Debug.Log("VRC_Bulk_Upload :: Registered with SDK");
     }
 
     static void StaticRepaint() {
@@ -183,6 +208,12 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
         return questifyerType != null;
     }
 
+    bool GetIsBusy() {
+        return avatarStates.Values.Any(avatarState => 
+            avatarState.state == State.Building || avatarState.state == State.Uploading
+        );
+    }
+
     void OnGUI() {
         scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
@@ -191,11 +222,11 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
 
         CustomGUI.LineGap();
 
-        if (!isLoggedIn) {
+        if (!GetIsLoggedIn()) {
             if (isLoggingIn) {
                 CustomGUI.RenderLoading("Waiting for SDK to login...");
 
-                if (CustomGUI.StandardButton("Try Again")) {
+                if (CustomGUI.StandardButton("Check Again")) {
                     #pragma warning disable CS4014
                     Login();
                     #pragma warning restore CS4014
@@ -203,13 +234,17 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
             } else {
                 CustomGUI.RenderErrorMessage("Failed to login. You must open the VRC SDK control panel first");
 
-                if (CustomGUI.StandardButton("Try Again")) {
+                if (CustomGUI.StandardButton("Check Again")) {
                     #pragma warning disable CS4014
                     Login();
                     #pragma warning restore CS4014
                 }
+
+                CustomGUI.LineGap();
             }
         }
+        
+        EditorGUI.BeginDisabledGroup(GetIsBusy());
         
         CustomGUI.LargeLabel("Avatars");
 
@@ -245,7 +280,7 @@ public class VRC_Bulk_Upload : EditorWindow, IActiveBuildTargetChanged {
             #pragma warning restore CS4014
         }
 
-        if (GetIsAndroid()) {
+        if (Utils.GetIsAndroid()) {
             CustomGUI.RenderWarningMessage("Warning: You are in Android mode");
         }
 
@@ -281,7 +316,7 @@ If something goes wrong just delete the Quest scene and start again.");
 
         CustomGUI.LineGap();
 
-        if (CustomGUI.StandardButton($"Switch To {(GetIsAndroid() ? "Windows" : "Android")}")) {
+        if (CustomGUI.StandardButton($"Switch To {(Utils.GetIsAndroid() ? "Windows" : "Android")}")) {
             SwitchPlatform();
         }
 
@@ -290,29 +325,27 @@ If something goes wrong just delete the Quest scene and start again.");
         RenderLogs();
 
         EditorGUILayout.EndScrollView();
+        
+        EditorGUI.EndDisabledGroup();
     }
 
-    static void SwitchPlatform() {
-        Debug.Log($"VRC_Bulk_Upload :: Switching platform...");
+    void SwitchPlatform() {
+        Utils.LogMessage($"Switching platform...");
 
-        if (GetIsAndroid()) {
+        if (Utils.GetIsAndroid()) {
             SwitchToWindows();
         } else {
             SwitchToAndroid();
         }
     }
 
-    static bool GetIsAndroid() {
-        return EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android;
-    }
-
-    static void SwitchToWindows() {
-        RecordLog($"Switch platform to Windows");
+    void SwitchToWindows() {
+        RecordMessage($"Switch platform to Windows");
         EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Standalone, BuildTarget.StandaloneWindows);
     }
 
-    static void SwitchToAndroid() {
-        RecordLog($"Switch platform to Android");
+    void SwitchToAndroid() {
+        RecordMessage($"Switch platform to Android");
         EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
     }
 
@@ -338,18 +371,9 @@ If something goes wrong just delete the Quest scene and start again.");
         EditorGUI.EndDisabledGroup();
     }
 
-    static void CreateFileIfDoesNotExist(string filePath) {
-        if (File.Exists(filePath))
-            return;
-
-        var fileName = Path.GetFileName(filePath);
-        var fileDirectoryPath = filePath.Replace(fileName, "");
-        Directory.CreateDirectory(fileDirectoryPath);
-    }
-
-    static void RecordLog(string message) {
-        CreateFileIfDoesNotExist(logPath);
-
+    void RecordMessage(string message) {
+        Utils.CreateDirectoryIfNoExist(logPath);
+        
         string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         string logMessage = $"{timestamp} - {message}";
 
@@ -358,24 +382,23 @@ If something goes wrong just delete the Quest scene and start again.");
 
 // HELPERS
 
-    static async Task<VRCAvatar> GetVRCAvatarFromDescriptor(VRCAvatarDescriptor vrcAvatarDescriptor) {
+    async Task<VRCAvatar> GetVRCAvatarFromDescriptor(VRCAvatarDescriptor vrcAvatarDescriptor) {
         var blueprintId = vrcAvatarDescriptor.GetComponent<PipelineManager>().blueprintId;
 
-        Debug.Log($"VRC_Bulk_Upload :: Fetching avatar for '{vrcAvatarDescriptor.gameObject.name}' ('{blueprintId}')...");
+        Utils.LogMessage($"Fetching avatar for '{vrcAvatarDescriptor.gameObject.name}' ('{blueprintId}')...");
 
         try {
-            VRCAvatar avatarData = await VRCApi.GetAvatar(blueprintId, true, cancellationToken: GetAvatarCancellationToken.Token);
+            getAvatarCancellationToken = new CancellationTokenSource();
 
-            Debug.Log($"VRC_Bulk_Upload :: Avatar found");
+            VRCAvatar avatarData = await VRCApi.GetAvatar(blueprintId, true, cancellationToken: getAvatarCancellationToken.Token);
+
+            Utils.LogMessage($"Fetch for '{vrcAvatarDescriptor.gameObject.name}' ('{blueprintId}') successful: '{avatarData}'");
 
             return avatarData;
         } catch (ApiErrorException ex) {
-            if (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                Debug.Log("VRC_Bulk_Upload :: Avatar not found (creating instead)");
-            }
-            else
-            {
+            if (ex.StatusCode == System.Net.HttpStatusCode.NotFound) {
+                Utils.LogMessage($"Fetch for '{vrcAvatarDescriptor.gameObject.name}' ('{blueprintId}') failed: avatar not found (creating instead)");
+            } else {
                 Debug.LogError(ex.ErrorMessage);
             }
         }
@@ -386,7 +409,7 @@ If something goes wrong just delete the Quest scene and start again.");
     async Task BuildAllAvatars() {
         var activeVrchatAvatars = GetVrchatAvatarsToProcess();
 
-        Debug.Log($"VRC_Bulk_Upload :: Building {activeVrchatAvatars.Count} avatars...");
+        Utils.LogMessage($"Building {activeVrchatAvatars.Count} avatars...");
 
         foreach (var activeVrchatAvatar in activeVrchatAvatars) {
             await BuildAvatar(activeVrchatAvatar);
@@ -396,7 +419,7 @@ If something goes wrong just delete the Quest scene and start again.");
     async Task BuildAndTestAllAvatars() {
         var activeVrchatAvatars = GetVrchatAvatarsToProcess();
 
-        Debug.Log($"VRC_Bulk_Upload :: Building and testing {activeVrchatAvatars.Count} avatars...");
+        Utils.LogMessage($"Building and testing {activeVrchatAvatars.Count} avatars...");
 
         foreach (var activeVrchatAvatar in activeVrchatAvatars) {
             await BuildAndTestAvatar(activeVrchatAvatar);
@@ -406,14 +429,14 @@ If something goes wrong just delete the Quest scene and start again.");
     async Task BuildAndUploadAllAvatars() {
         var activeVrchatAvatars = GetVrchatAvatarsToProcess();
 
-        Debug.Log($"VRC_Bulk_Upload :: Building and uploading {activeVrchatAvatars.Count} avatars...");
+        Utils.LogMessage($"Building and uploading {activeVrchatAvatars.Count} avatars...");
 
         foreach (var activeVrchatAvatar in activeVrchatAvatars) {
             await BuildAndUploadAvatar(activeVrchatAvatar);
         }
 
         if (autoQuestify) {
-            Debug.Log("VRC_Bulk_Upload :: Auto Questify enabled");
+            Utils.LogMessage("Auto Questify enabled (setting editor pref)");
             
             EditorPrefs.SetBool(editorPrefNeedsToQuestifyKey, true);
 
@@ -421,7 +444,7 @@ If something goes wrong just delete the Quest scene and start again.");
             SwitchToAndroid();
             #pragma warning restore CS4014
         } else {
-            Debug.Log("VRC_Bulk_Upload :: Auto Questify disabled");
+            Utils.LogMessage("Auto Questify disabled (not setting editor pref)");
             
             EditorPrefs.SetBool(editorPrefNeedsToQuestifyKey, false);
         }
@@ -435,14 +458,18 @@ If something goes wrong just delete the Quest scene and start again.");
             return;
         }
 
-        Debug.Log($"VRC_Bulk_Upload :: Switched to Android");
+        Utils.LogMessage($"Switched to Android");
     }
 
-    static async Task QuestifyActiveSceneAndReturnToWindows() {
-        Debug.Log($"VRC_Bulk_Upload :: Questify active scene");
+    async Task QuestifyActiveSceneAndReturnToWindows() {
+        Utils.LogMessage($"Questify active scene");
+
+        if (!Utils.GetIsAndroid()) {
+            throw new System.Exception("Tried to questify active scene without being in Android");
+        }
 
         if (!await Login()) {
-            Debug.Log($"VRC_Bulk_Upload :: Cannot Questify without being logged in");
+            Utils.LogMessage($"Cannot Questify without being logged in");
             return;
         }
 
@@ -454,25 +481,25 @@ If something goes wrong just delete the Quest scene and start again.");
 
         await QuestifyAndUploadAllAvatarsInAndroid();
 
-        Debug.Log($"VRC_Bulk_Upload :: Questify done");
+        Utils.LogMessage($"Questify done");
 
-        Debug.Log($"VRC_Bulk_Upload :: Switching to Windows scene...");
+        Utils.LogMessage($"Switching to Windows scene...");
 
         Questify.SwitchScene(originalScenePath);
         
-        Debug.Log($"VRC_Bulk_Upload :: Switching to Windows...");
+        Utils.LogMessage($"Switching to Windows...");
 
         isAlreadyQuestifying = false;
 
         SwitchToWindows();
     }
 
-    static async Task QuestifyAndUploadAllAvatarsInAndroid() {
-        Debug.Log($"VRC_Bulk_Upload :: Questifying all avatars (in Android)...");
+    async Task QuestifyAndUploadAllAvatarsInAndroid() {
+        Utils.LogMessage($"Questifying all avatars (in Android)...");
 
         var activeVrchatAvatars = GetVrchatAvatarsToProcess(true);
 
-        Debug.Log($"VRC_Bulk_Upload :: Found {activeVrchatAvatars.Count} active avatars");
+        Utils.LogMessage($"Found {activeVrchatAvatars.Count} active avatars");
         
         var questifiedVrchatAvatars = new List<VRCAvatarDescriptor>();
 
@@ -481,23 +508,21 @@ If something goes wrong just delete the Quest scene and start again.");
             questifiedVrchatAvatars.Add(questifiedVrchatAvatar);
         }
 
-        Debug.Log($"VRC_Bulk_Upload :: {questifiedVrchatAvatars.Count} avatars processed by Questifyer");
-
-        await WaitForRegisteredWithSdk();
+        Utils.LogMessage($"{questifiedVrchatAvatars.Count} avatars processed by Questifyer");
         
-        Debug.Log($"VRC_Bulk_Upload :: Building and uploading each Questify'd avatar...");
+        Utils.LogMessage($"Building and uploading each Questify'd avatar...");
 
         foreach (var questifiedVrchatAvatar in questifiedVrchatAvatars) {
             await BuildAndUploadAvatar(questifiedVrchatAvatar);
         }
         
-        Debug.Log($"VRC_Bulk_Upload :: All avatars Questify success");
+        Utils.LogMessage($"All avatars Questify success");
     }
 
     async Task BuildAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
-        Debug.Log($"VRC_Bulk_Upload :: Building '{vrcAvatarDescriptor.gameObject.name}'...");
+        Utils.LogMessage($"Building '{vrcAvatarDescriptor.gameObject.name}'...");
 
-        RecordLog($"Build '{vrcAvatarDescriptor.gameObject.name}'...");
+        RecordMessage($"Build '{vrcAvatarDescriptor.gameObject.name}'...");
         
         try {
             if (!VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
@@ -511,29 +536,31 @@ If something goes wrong just delete the Quest scene and start again.");
 
             string bundlePath = await builder.Build(vrcAvatarDescriptor.gameObject);
             
-            Debug.Log($"VRC_Bulk_Upload :: '{vrcAvatarDescriptor.gameObject.name}' built to '{bundlePath}'");
+            Utils.LogMessage($"'{vrcAvatarDescriptor.gameObject.name}' built to '{bundlePath}'");
             
             SetAvatarState(vrcAvatarDescriptor, State.Success);
             
-            RecordLog($"Build '{vrcAvatarDescriptor.gameObject.name}' success");
+            RecordMessage($"Build '{vrcAvatarDescriptor.gameObject.name}' success");
         } catch (System.Exception e) {
             Debug.LogError(e);
             SetAvatarState(vrcAvatarDescriptor, State.Failed, e);
-            RecordLog($"Build '{vrcAvatarDescriptor.gameObject.name}' failed");
+            RecordMessage($"Build '{vrcAvatarDescriptor.gameObject.name}' failed");
+
+            throw e;
         }
     }
 
-    static async Task BuildAndUploadAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
-        Debug.Log($"VRC_Bulk_Upload :: Building and uploading '{vrcAvatarDescriptor.gameObject.name}'...");
+    async Task BuildAndUploadAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
+        Utils.LogMessage($"Building and uploading '{vrcAvatarDescriptor.gameObject.name}'...");
 
-        RecordLog($"Build and upload '{vrcAvatarDescriptor.gameObject.name}'...");
+        RecordMessage($"Build and upload '{vrcAvatarDescriptor.gameObject.name}'...");
 
         try {
-            if (!isLoggedIn) {
+            if (!GetIsLoggedIn()) {
                 var result = await Login();
 
                 if (!result) {
-                    Debug.Log($"VRC_Bulk_Upload :: Tried to login and failed");
+                    Utils.LogMessage($"Tried to login and failed");
                     return;
                 }
             }
@@ -549,26 +576,36 @@ If something goes wrong just delete the Quest scene and start again.");
 
             var vrcAvatar = await GetVRCAvatarFromDescriptor(vrcAvatarDescriptor);
 
-            Debug.Log("VRC_Bulk_Upload :: SDK build and upload");
+            Utils.LogMessage($"Telling SDK to build and upload '{vrcAvatarDescriptor.gameObject}'...");
 
-            await builder.BuildAndUpload(vrcAvatarDescriptor.gameObject, vrcAvatar, cancellationToken: BuildAndUploadCancellationToken.Token);
+            // TODO: Allow user to cancel
+            buildAndUploadCancellationToken = new CancellationTokenSource();
+
+            // without this check if something goes wrong the SDK blindly assumes you are logged in without a helpful message
+            if (!GetIsLoggedIn()) {
+                throw new System.Exception("Not logged in");
+            }
+
+            await builder.BuildAndUpload(vrcAvatarDescriptor.gameObject, vrcAvatar, cancellationToken: buildAndUploadCancellationToken.Token);
             
-            Debug.Log("VRC_Bulk_Upload :: SDK build and upload success");
+            Utils.LogMessage("SDK build and upload success");
 
             SetAvatarState(vrcAvatarDescriptor, State.Success);
             
-            RecordLog($"Build and upload '{vrcAvatarDescriptor.gameObject.name}' success");
+            RecordMessage($"Build and upload '{vrcAvatarDescriptor.gameObject.name}' success");
         } catch (System.Exception e) {
             Debug.LogError(e);
             SetAvatarState(vrcAvatarDescriptor, State.Failed, e);
-            RecordLog($"Build and upload '{vrcAvatarDescriptor.gameObject.name}' failed");
+            RecordMessage($"Build and upload '{vrcAvatarDescriptor.gameObject.name}' failed");
+            
+            throw e;
         }
     }
 
-    static async Task BuildAndTestAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
-        Debug.Log($"VRC_Bulk_Upload :: Building and testing '{vrcAvatarDescriptor.gameObject.name}'...");
+    async Task BuildAndTestAvatar(VRCAvatarDescriptor vrcAvatarDescriptor) {
+        Utils.LogMessage($"Building and testing '{vrcAvatarDescriptor.gameObject.name}'...");
         
-        RecordLog($"Build and test '{vrcAvatarDescriptor.gameObject.name}'...");
+        RecordMessage($"Build and test '{vrcAvatarDescriptor.gameObject.name}'...");
 
         try {
             if (!VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
@@ -584,16 +621,18 @@ If something goes wrong just delete the Quest scene and start again.");
 
             SetAvatarState(vrcAvatarDescriptor, State.Success);
             
-            RecordLog($"Build and test '{vrcAvatarDescriptor.gameObject.name}' success");
+            RecordMessage($"Build and test '{vrcAvatarDescriptor.gameObject.name}' success");
         } catch (System.Exception e) {
             Debug.LogError(e);
             SetAvatarState(vrcAvatarDescriptor, State.Failed, e);
-            RecordLog($"Build and test '{vrcAvatarDescriptor.gameObject.name}' failed");
+            RecordMessage($"Build and test '{vrcAvatarDescriptor.gameObject.name}' failed");
+            
+            throw e;
         }
     }
 
     void ResetAvatars() {
-        Debug.Log("VRC_Bulk_Upload :: Reset avatars");
+        Utils.LogMessage("Reset avatars");
 
         foreach (var key in avatarStates.Keys.ToList())
         {
@@ -603,7 +642,7 @@ If something goes wrong just delete the Quest scene and start again.");
             };
         }
 
-        RecordLog("Reset avatars");
+        RecordMessage("Reset avatars");
     }
 
     static Scene[] GetLoadedScenes() {
@@ -631,11 +670,15 @@ If something goes wrong just delete the Quest scene and start again.");
         return rootObjects.ToArray();
     }
 
-    static List<VRCAvatarDescriptor> GetVrchatAvatarsToProcess(bool ignoreQuestCheck = false) {
+    List<VRCAvatarDescriptor> GetVrchatAvatarsToProcess(bool ignoreQuestCheck = false) {
         GameObject[] rootObjects = GetRootObjectsInAllLoadedScenes();
         var vrcAvatarDescriptors = new List<VRCAvatarDescriptor>();
 
         foreach (var rootObject in rootObjects) {
+            if (!rootObject.activeSelf) {
+                continue;
+            }
+
             VRCAvatarDescriptor vrcAvatarDescriptor = rootObject.GetComponent<VRCAvatarDescriptor>();
 
             if (!GetCanAvatarBeBuilt(vrcAvatarDescriptor, ignoreQuestCheck)) {
@@ -648,7 +691,7 @@ If something goes wrong just delete the Quest scene and start again.");
         return vrcAvatarDescriptors;
     }
 
-    static bool GetIsAvatarForMyPlatform(VRCAvatarDescriptor vrcAvatarDescriptor) {
+    bool GetIsAvatarForMyPlatform(VRCAvatarDescriptor vrcAvatarDescriptor) {
         return (
             vrcAvatarDescriptor.gameObject.name.Contains(textInNameForQuest) && EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android
             ||
@@ -656,7 +699,7 @@ If something goes wrong just delete the Quest scene and start again.");
         );
     }
 
-    static bool GetCanAvatarBeBuilt(VRCAvatarDescriptor vrcAvatarDescriptor, bool ignoreQuestCheck = false) {
+    bool GetCanAvatarBeBuilt(VRCAvatarDescriptor vrcAvatarDescriptor, bool ignoreQuestCheck = false) {
         return vrcAvatarDescriptor != null 
             && vrcAvatarDescriptor.gameObject.GetComponent<Animator>() != null 
             && vrcAvatarDescriptor.gameObject.activeSelf 
@@ -667,7 +710,7 @@ If something goes wrong just delete the Quest scene and start again.");
         return GetCanAvatarBeBuilt(vrcAvatarDescriptor) && vrcAvatarDescriptor.gameObject.GetComponent<PipelineManager>().blueprintId != null && vrcAvatarDescriptor.gameObject.activeSelf && ((onlyAllowQuestOnAndroid && GetIsAvatarForMyPlatform(vrcAvatarDescriptor)) || !onlyAllowQuestOnAndroid);
     }
 
-    static AvatarState GetAvatarRootState(VRCAvatarDescriptor vrcAvatarDescriptor) {
+    AvatarState GetAvatarRootState(VRCAvatarDescriptor vrcAvatarDescriptor) {
         if (!avatarStates.ContainsKey(vrcAvatarDescriptor.gameObject.name)) {
             avatarStates[vrcAvatarDescriptor.gameObject.name] = new AvatarState() {
                 state = State.Idle
@@ -676,47 +719,61 @@ If something goes wrong just delete the Quest scene and start again.");
         return avatarStates[vrcAvatarDescriptor.gameObject.name];
     }
 
-    static void SetAvatarRootState(VRCAvatarDescriptor vrcAvatarDescriptor, AvatarState newRootState) {
+    void SetAvatarRootState(VRCAvatarDescriptor vrcAvatarDescriptor, AvatarState newRootState) {
+        Debug.Log($"SET {vrcAvatarDescriptor.gameObject.name} => {newRootState.state}");
         avatarStates[vrcAvatarDescriptor.gameObject.name] = newRootState;
     }
 
-    static void SetAvatarAction(VRCAvatarDescriptor vrcAvatarDescriptor, Action newAction) {
+    void SetAvatarAction(VRCAvatarDescriptor vrcAvatarDescriptor, Action newAction) {
         var existingState = GetAvatarRootState(vrcAvatarDescriptor);
 
-        Debug.Log($"VRC_Bulk_Upload :: Action '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.action}' => '{newAction}'");
-
-        existingState.action = newAction;
-
-        SetAvatarRootState(vrcAvatarDescriptor, existingState);
-    }
-
-    static void SetAvatarState(VRCAvatarDescriptor vrcAvatarDescriptor, State newState, System.Exception exception = null) {
-        var existingState = GetAvatarRootState(vrcAvatarDescriptor);
-
-        Debug.Log($"VRC_Bulk_Upload :: State '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.state}' => '{newState}'");
-
-        existingState.state = newState;
-        existingState.exception = exception;
+        Utils.LogMessage($"Action '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.action}' => '{newAction}'");
         
-        SetAvatarRootState(vrcAvatarDescriptor, existingState);
+        avatarStates[vrcAvatarDescriptor.gameObject.name] = new AvatarState() {
+            state = existingState.state,
+            exception = existingState.exception,
+            action = newAction,
+            buildState = existingState.buildState,
+            uploadState = existingState.uploadState
+        };
     }
 
-    static void SetAvatarBuildState(VRCAvatarDescriptor vrcAvatarDescriptor, SdkBuildState? newBuildState) {
+    void SetAvatarState(VRCAvatarDescriptor vrcAvatarDescriptor, State newState, System.Exception exception = null) {
         var existingState = GetAvatarRootState(vrcAvatarDescriptor);
+
+        Utils.LogMessage($"Internal State '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.state}' => '{newState}'");
+
+        avatarStates[vrcAvatarDescriptor.gameObject.name] = new AvatarState() {
+            state = newState,
+            exception = exception,
+            action = existingState.action,
+            buildState = existingState.buildState,
+            uploadState = existingState.uploadState
+        };
+    }
+
+    void SetAvatarBuildState(VRCAvatarDescriptor vrcAvatarDescriptor, SdkBuildState? newBuildState) {
+        var existingState = GetAvatarRootState(vrcAvatarDescriptor);
+        
+        Utils.LogMessage($"Build State '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.buildState}' => '{newBuildState}'");
 
         if (existingState.buildState == newBuildState) {
             return;
         }
-        
-        Debug.Log($"VRC_Bulk_Upload :: Build State '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.buildState}' => '{newBuildState}'");
 
-        existingState.buildState = newBuildState;
-        
-        SetAvatarRootState(vrcAvatarDescriptor, existingState);
+        avatarStates[vrcAvatarDescriptor.gameObject.name] = new AvatarState() {
+            state = existingState.state,
+            exception = existingState.exception,
+            action = existingState.action,
+            buildState = newBuildState,
+            uploadState = existingState.uploadState
+        };
     }
 
-    static void SetAvatarUploadState(VRCAvatarDescriptor vrcAvatarDescriptor, SdkUploadState? newUploadState) {
+    void SetAvatarUploadState(VRCAvatarDescriptor vrcAvatarDescriptor, SdkUploadState? newUploadState) {
         var existingState = GetAvatarRootState(vrcAvatarDescriptor);
+        
+        Utils.LogMessage($"Upload State '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.uploadState}' => '{newUploadState}'");
 
         if (existingState.uploadState == newUploadState) {
             return;
@@ -724,11 +781,13 @@ If something goes wrong just delete the Quest scene and start again.");
 
         // NOTE: SDK changes upload state to empty while uploading for some reason
 
-        Debug.Log($"VRC_Bulk_Upload :: Upload State '{currentVrcAvatarDescriptor.gameObject.name}' '{existingState.uploadState}' => '{newUploadState}'");
-
-        existingState.uploadState = newUploadState;
-        
-        SetAvatarRootState(vrcAvatarDescriptor, existingState);
+        avatarStates[vrcAvatarDescriptor.gameObject.name] = new AvatarState() {
+            state = existingState.state,
+            exception = existingState.exception,
+            action = existingState.action,
+            buildState = existingState.buildState,
+            uploadState = newUploadState
+        };
     }
 
 // RENDER GUI
@@ -811,11 +870,14 @@ If something goes wrong just delete the Quest scene and start again.");
 
     void RenderAvatarState(VRCAvatarDescriptor vrcAvatarDescriptor) {
         AvatarState avatarState = GetAvatarRootState(vrcAvatarDescriptor);
+        
+        // GUILayout.Label($"B: {avatarState.buildState}  U: {avatarState.uploadState}  I: {avatarState.state}");
 
         switch (avatarState.state) {
             case State.Idle:
+                GUI.contentColor = new Color(1f, 1f, 1f, 0.2f);
+                GUILayout.Label("Waiting");
                 GUI.contentColor = Color.white;
-                GUILayout.Label("");
                 break;
             case State.Building:
                 GUI.contentColor = new Color(0.8f, 0.8f, 1f, 1);
@@ -844,68 +906,79 @@ If something goes wrong just delete the Quest scene and start again.");
 
 // VRCHAT SDK
 
+    void RegisterSDKCallback() {
+        Utils.LogMessage("Registering SDK callbacks...");
+
+        VRCSdkControlPanel.OnSdkPanelEnable += AddBuildHook;
+    }
+
+    void UnregisterSDKCallback() {
+        Utils.LogMessage("Unregistering SDK callbacks...");
+
+        VRCSdkControlPanel.OnSdkPanelEnable -= AddBuildHook;
+
+        if (VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
+            Utils.LogMessage("Removing build hooks...");
+
+            builder.OnSdkBuildStart -= OnBuildStarted;
+            builder.OnSdkUploadStart -= OnUploadStarted;
+            builder.OnSdkBuildStateChange -= OnSdkBuildStateChange;
+            builder.OnSdkUploadStateChange -= OnSdkUploadStateChange;
+        }
+    }
+
+    public void AddBuildHook(object sender, System.EventArgs e) {
+        if (VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
+            Utils.LogMessage("Adding build hooks...");
+
+            builder.OnSdkBuildStart += OnBuildStarted;
+            builder.OnSdkUploadStart += OnUploadStarted;
+            builder.OnSdkBuildStateChange += OnSdkBuildStateChange;
+            builder.OnSdkUploadStateChange += OnSdkUploadStateChange;
+        }
+    }
+
+    public void OnBuildStarted(object sender, object target) {
+        var name = ((GameObject)target).name;
+        Utils.LogMessage($"SDK.OnBuildStarted :: Building '{name}'...");
+
+        currentVrcAvatarDescriptor = ((GameObject)target).GetComponent<VRCAvatarDescriptor>();
+
+        SetAvatarState(currentVrcAvatarDescriptor, State.Building);
+    }
+
+    public void OnSdkBuildStateChange(object sender, SdkBuildState newState) {
+        Utils.LogMessage($"SDK.OnSdkBuildStateChange :: Build state for '{currentVrcAvatarDescriptor.gameObject.name}' is now '{newState}'");
+
+        SetAvatarBuildState(currentVrcAvatarDescriptor, newState);
+        SetAvatarUploadState(currentVrcAvatarDescriptor, null);
+    }
+
+    public void OnUploadStarted(object sender, object target) {
+        Utils.LogMessage($"SDK.OnUploadStarted :: Uploading...");
+
+        SetAvatarState(currentVrcAvatarDescriptor, State.Uploading);
+    }
+
+    public void OnSdkUploadStateChange(object sender, SdkUploadState newState) {
+        // NOTE: This gets called for build state change too for some reason
+
+        Utils.LogMessage($"SDK.OnSdkUploadStateChange :: Upload state for '{currentVrcAvatarDescriptor.gameObject.name}' is now '{newState}'");
+
+        SetAvatarBuildState(currentVrcAvatarDescriptor, null);
+        SetAvatarUploadState(currentVrcAvatarDescriptor, newState);
+    }
+
+// VRCHAT SDK
+
     class VRCSDK_Extension {
-        [InitializeOnLoadMethod]
-        public static void RegisterSDKCallback() {
-            Debug.Log("VRC_Bulk_Upload :: SDK.RegisterSDKCallback");
-            VRCSdkControlPanel.OnSdkPanelEnable += AddBuildHook;
-
-            VRC_Bulk_Upload.isRegisteredWithSdk = true;
-        }
-
-        private static void AddBuildHook(object sender, System.EventArgs e) {
-            if (VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder)) {
-                builder.OnSdkBuildStart += OnBuildStarted;
-                builder.OnSdkUploadStart += OnUploadStarted;
-                builder.OnSdkBuildStateChange += OnSdkBuildStateChange;
-                builder.OnSdkUploadStateChange += OnSdkUploadStateChange;
-            }
-        }
-
-        public int callbackOrder => 0;
-
-        private static void OnBuildStarted(object sender, object target) {
-            var name = ((GameObject)target).name;
-            Debug.Log($"VRC_Bulk_Upload :: SDK.OnBuildStarted :: Building '{name}'...");
-
-            currentVrcAvatarDescriptor = ((GameObject)target).GetComponent<VRCAvatarDescriptor>();
-
-            SetAvatarState(currentVrcAvatarDescriptor, State.Building);
-            SetAvatarBuildState(currentVrcAvatarDescriptor, null);
-            SetAvatarUploadState(currentVrcAvatarDescriptor, null);
-        }
-
-        private static void OnSdkBuildStateChange(object sender, SdkBuildState newState) {
-            Debug.Log($"VRC_Bulk_Upload :: SDK.OnSdkBuildStateChange :: Build state for '{currentVrcAvatarDescriptor.gameObject.name}' is now '{newState}'");
-
-            SetAvatarBuildState(currentVrcAvatarDescriptor, newState);
-            SetAvatarUploadState(currentVrcAvatarDescriptor, null);
-        }
-
-        private static void OnUploadStarted(object sender, object target) {
-            Debug.Log($"VRC_Bulk_Upload :: SDK.OnUploadStarted :: Uploading...");
-
-            SetAvatarState(currentVrcAvatarDescriptor, State.Uploading);
-            SetAvatarBuildState(currentVrcAvatarDescriptor, null);
-            SetAvatarUploadState(currentVrcAvatarDescriptor, null);
-        }
-
-        private static void OnSdkUploadStateChange(object sender, SdkUploadState newState) {
-            // NOTE: This gets called for build state change too for some reason
-
-            Debug.Log($"VRC_Bulk_Upload :: SDK.OnSdkUploadStateChange :: Upload state for '{currentVrcAvatarDescriptor.gameObject.name}' is now '{newState}'");
-
-            SetAvatarBuildState(currentVrcAvatarDescriptor, null);
-            SetAvatarUploadState(currentVrcAvatarDescriptor, newState);
-        }
-
         [InitializeOnLoad]
         public class PreuploadHook : IVRCSDKPreprocessAvatarCallback {
             // This has to be before -1024 when VRCSDK deletes our components
             public int callbackOrder => -90000;
 
             public bool OnPreprocessAvatar(GameObject clonedAvatarGameObject) {
-                Debug.Log($"VRC_Bulk_Upload :: SDK.OnPreprocessAvatar :: '{clonedAvatarGameObject.name}'");
+                Utils.LogMessage($"SDK.OnPreprocessAvatar :: Process avatar '{clonedAvatarGameObject.name}'");
                 return true;
             }
         }
@@ -915,7 +988,7 @@ If something goes wrong just delete the Quest scene and start again.");
         public int callbackOrder => -90001;
 
         public bool OnBuildRequested(VRCSDKRequestedBuildType requestedBuildType) {
-            Debug.Log($"VRC_Bulk_Upload :: SDK.OnBuildRequested :: '{requestedBuildType}'");
+            Utils.LogMessage($"SDK.OnBuildRequested :: Build type '{requestedBuildType}'");
             return true;
         }
     }

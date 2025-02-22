@@ -1,3 +1,15 @@
+# 1.4.0
+
+- UI now disabled if any avatar is building or uploading
+- fixed inconsistent behavior on Android
+- improved reliability of logging in
+- now finds avatars in all active scenes [#6](https://github.com/imagitama/vrc-bulk-upload/pull/6)
+- moved log file to temp directory [#7](https://github.com/imagitama/vrc-bulk-upload/pull/7)
+
+# 1.3.1
+
+- fix always questifying in android
+
 # 1.3.0
 
 - no longer requires you to open SDK panel
